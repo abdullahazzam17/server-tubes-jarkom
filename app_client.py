@@ -22,7 +22,8 @@ import random
 import time
 
 PORT = 8080
-HOST = 'server-tubes-jarkom-production.up.railway.app'
+HOST = 'azzamgans-server-tubes-jarkom.hf.space'
+PORT = 8080'
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
 
