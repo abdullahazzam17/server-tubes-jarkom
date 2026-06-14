@@ -23,7 +23,7 @@ import time
 
 PORT = 8080
 HOST = 'azzamgans-server-tubes-jarkom.hf.space'
-PORT = 8080'
+PORT = 8080
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
 
