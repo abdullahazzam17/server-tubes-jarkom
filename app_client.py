@@ -19,9 +19,19 @@ import os
 import random
 import time
 
+# 🔥 FIX SAKTI: DEFAULT SESSION STATE INITIALIZER DI PALING ATAS BIAR GAK ATTRIBUTE ERROR
+if "file_uploader_key" not in st.session_state: 
+    st.session_state.file_uploader_key = 0
+if "connected" not in st.session_state: 
+    st.session_state.connected = False
+if "active_room" not in st.session_state: 
+    st.session_state.active_room = None
+if "active_room_type" not in st.session_state: 
+    st.session_state.active_room_type = None
+
 # --- KONFIGURASI JARINGAN ---
 TCP_PORT = 8080
-HOST = '103.150.117.213' # IP VPS Biznet Lu murni
+HOST = '103.150.117.213'  # IP VPS Biznet Lu murni
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
 
@@ -264,20 +274,18 @@ else:
             target_toa = st.selectbox("Pilih Jalur Distribusi:", ["Kirim ke Semua Grup Divisi", "Kirim ke Semua Chat Personal"], key="target_toa_select")
             isi_toa = st.text_area("Isi Pengumuman Toa:", key="isi_toa_text")
             
-            # 🔥 SAKTI: DI SINI TOMBOL UPLOAD BROADCAST-NYA GUA PASANG NYET!
+            # Kolom upload berkas di menu pimpinan (Maks 200MB)
             file_toa = st.file_uploader("Lampirkan Berkas Pengumuman (Maks 200MB):", key="file_toa_uploader")
             
             if st.button("Semburkan Toa 📢", use_container_width=True):
                 if isi_toa or file_toa:
                     macro_type = "BROADCAST_TOA_ALL_GROUPS" if "Grup" in target_toa else "BROADCAST_TOA_ALL_PERSONAL"
                     
-                    # Logika penyusunan paket (Apakah kirim file biner atau cuma teks biasa)
                     if file_toa:
                         nama_f = file_toa.name
                         konten_f_bytes = file_toa.read()
                         encoded_file = base64.b64encode(konten_f_bytes).decode('utf-8')
                         
-                        # Simpan di lokal folder pimpinan sendiri biar bisa ke-render di UI kamar chat dia
                         with open(os.path.join(FOLDER_TERIMA, nama_f), 'wb') as f: f.write(konten_f_bytes)
                         
                         packet = {
