@@ -23,7 +23,6 @@ import time
 
 PORT = 8080
 HOST = '103.150.117.213'
-PORT = 8080
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
 
