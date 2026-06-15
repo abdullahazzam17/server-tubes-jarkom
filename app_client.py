@@ -5,7 +5,7 @@ import json
 import random
 
 # ======= KONFIGURASI SERVER UTAMA (MAKELAR) =======
-SERVER_UTAMA_IP = '103.150.117.213'  # IP VPS TAN Lu
+SERVER_UTAMA_IP = '103.150.117.213'  # IP VPS tan Lu
 SERVER_UTAMA_PORT = 8080
 
 # Fungsi otomatis dapetin IP Lokal asli laptop lu (192.168.x.x)
@@ -31,7 +31,7 @@ if "chat_history" not in str.session_state:
 if "registered" not in str.session_state:
     str.session_state.registered = False
 
-# THREAD SERVER INTERNAL (MENERIMA SAMBUNGAN PORT DIRECT)
+# ======= 1. THREAD SERVER INTERNAL (MENERIMA SAMBUNGAN PORT DIRECT) =======
 def p2p_listener_thread(port):
     peer_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     peer_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -56,6 +56,7 @@ if not str.session_state.get("listener_started", False):
     threading.Thread(target=p2p_listener_thread, args=(str.session_state.my_port,), daemon=True).start()
     str.session_state.listener_started = True
 
+# ======= 2. FUNGSI REGISTER =======
 def register_ke_central(user_id, nama, divisi):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -65,7 +66,7 @@ def register_ke_central(user_id, nama, divisi):
             "id": user_id,
             "nama": nama,
             "divisi": divisi,
-            "local_ip": str.session_state.my_local_ip, # Kirim IP lokal
+            "local_ip": str.session_state.my_local_ip,
             "listening_port": str.session_state.my_port
         }
         s.sendall(json.dumps(req).encode('utf-8'))
@@ -77,6 +78,7 @@ def register_ke_central(user_id, nama, divisi):
     except Exception as e:
         str.error(f"❌ Gagal koneksi ke Operator Pusat: {e}")
 
+# ======= 3. FUNGSI UNICAST P2P MURNI =======
 def kirim_unicast_p2p(my_name, target_id, pesan):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -90,7 +92,7 @@ def kirim_unicast_p2p(my_name, target_id, pesan):
         
         if target_info:
             p2p_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            p2p_socket.connect((target_info["ip"], target_info["port"])) # Hubungkan langsung ke IP lokal target!
+            p2p_socket.connect((target_info["ip"], target_info["port"]))
             
             packet = {"from_name": my_name, "msg": pesan, "type": "Personal Chat (P2P)"}
             p2p_socket.sendall(json.dumps(packet).encode('utf-8'))
@@ -102,6 +104,37 @@ def kirim_unicast_p2p(my_name, target_id, pesan):
     except Exception as e:
         str.error(f"❌ Gagal kirim direct port: {e}")
 
+# ======= 4. FUNGSI MULTICAST P2P MURNI (BARU!) =======
+def multicast_murni_p2p(my_id, my_name, target_divisi, pesan):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((SERVER_UTAMA_IP, SERVER_UTAMA_PORT))
+        s.sendall(json.dumps({"type": "FETCH_DIRECTORY"}).encode('utf-8'))
+        res = json.loads(s.recv(4096).decode('utf-8'))
+        s.close()
+        
+        directory = res.get("users", {})
+        count_sent = 0
+        
+        # Loop sejati: Cuma nembak port milik user yang divisinya cocok
+        for uid, info in directory.items():
+            if uid != my_id and info["divisi"] == target_divisi:
+                try:
+                    p2p_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    p2p_socket.connect((info["ip"], info["port"]))
+                    packet = {"from_name": my_name, "msg": pesan, "type": f"Group [{target_divisi}] (P2P)"}
+                    p2p_socket.sendall(json.dumps(packet).encode('utf-8'))
+                    p2p_socket.close()
+                    count_sent += 1
+                except Exception:
+                    pass
+        
+        str.session_state.chat_history.append({"from": "Anda", "msg": pesan, "type": f"Multicast ke {target_divisi}"})
+        str.success(f"🚀 Multicast terkirim langsung ke {count_sent} port di divisi [{target_divisi}]!")
+    except Exception as e:
+        str.error(f"🔥 Eror multicast port: {e}")
+
+# ======= 5. FUNGSI BROADCAST P2P MURNI =======
 def broadcast_murni_p2p(my_id, my_name, pesan):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -134,32 +167,46 @@ if not str.session_state.registered:
     c1, c2, c3 = str.columns(3)
     with c1: u_id = str.text_input("Masukkan ID Anda")
     with c2: u_nama = str.text_input("Nama Lengkap")
-    with c3: u_divisi = str.selectbox("Divisi", ["Pimpinan", "Administrasi", "Operasional"])
+    with c3: u_divisi = str.selectbox("Divisi Anda", ["Pimpinan", "Administrasi", "Operasional"])
     
     if str.button("Masuk Jaringan Telepon 🚀"):
         if u_id and u_nama:
             register_ke_central(u_id, u_nama, u_divisi)
             str.session_state.my_id = u_id
             str.session_state.my_name = u_nama
+            str.session_state.my_divisi = u_divisi
             str.rerun()
 else:
     str.sidebar.title(f"👤 {str.session_state.my_name}")
     str.sidebar.write(f"**ID:** {str.session_state.my_id}")
+    str.sidebar.write(f"**Divisi Lu:** {str.session_state.my_divisi}")
     str.sidebar.write(f"**IP Anda:** `{str.session_state.my_local_ip}`")
     str.sidebar.write(f"**Port Standby:** `{str.session_state.my_port}`")
     if str.sidebar.button("Refresh Masukan Chat 🔄"): str.rerun()
     
-    tab1, tab2 = str.tabs(["💬 Unicast (Port-to-Port)", "📢 Broadcast (Semua Port)"])
+    # SEKARANG SUDAH ADA 3 TAB SESUAI STANDAR MODUL
+    tab1, tab2, tab3 = str.tabs(["💬 Unicast (Port-to-Port)", "👥 Multicast (Per Divisi)", "📢 Broadcast (Semua Port)"])
     
     with tab1:
+        str.subheader("📞 Jalur Unicast Dedicated (1 Port untuk 2 User)")
         target = str.text_input("Masukkan ID Target")
-        pesan_uni = str.text_input("Isi Pesan")
-        if str.button("Hubungkan & Kirim Pesan 📞"):
+        pesan_uni = str.text_input("Isi Pesan Unicast")
+        if str.button("Hubungkan & Kirim Unicast 📞"):
             if target and pesan_uni:
                 kirim_unicast_p2p(str.session_state.my_name, target, pesan_uni)
                 str.rerun()
                 
     with tab2:
+        str.subheader("👥 Jalur Multicast (Hanya Menembak Port Divisi Tertentu)")
+        target_div = str.selectbox("Pilih Divisi Target", ["Pimpinan", "Administrasi", "Operasional"])
+        pesan_multi = str.text_input("Isi Pesan Multicast")
+        if str.button("Kirim ke Port Divisi 🚀"):
+            if target_div and pesan_multi:
+                multicast_murni_p2p(str.session_state.my_id, str.session_state.my_name, target_div, pesan_multi)
+                str.rerun()
+                
+    with tab3:
+        str.subheader("🚨 Jalur Broadcast TOA (Hantam Semua Port Aktif di Sistem)")
         pesan_broad = str.text_input("Teks Pengumuman TOA")
         if str.button("Injeksi Massal Ke Semua Port Jaringan 🚨"):
             if pesan_broad:
