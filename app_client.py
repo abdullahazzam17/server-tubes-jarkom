@@ -21,10 +21,7 @@ import time
 
 # --- KONFIGURASI JARINGAN ---
 TCP_PORT = 8080
-UDP_MULTICAST_PORT = 5007
-UDP_BROADCAST_PORT = 5008
-HOST = '103.150.117.213'
-MULTICAST_GROUP = '224.1.1.1'
+HOST = '103.150.117.213'  # IP VPS Biznet Lu
 
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
@@ -72,7 +69,7 @@ def kirim_control_tcp(packet):
     return None
 
 def kirim_packet_unicast_tcp(payload):
-    """Skenario Unicast (1-20): Menggunakan TCP (Reliable)"""
+    """Skenario Unicast: Menggunakan TCP (Reliable)"""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((HOST, TCP_PORT))
@@ -86,38 +83,39 @@ def kirim_packet_unicast_tcp(payload):
         return False
 
 def kirim_packet_multicast_udp(payload):
-    """Skenario Multicast (21-30): Menggunakan UDP Kelas D"""
+    """
+    Skenario Multicast: Nama fungsi TETAP UDP agar tidak merusak kode UI,
+    tetapi mekanisme diganti menggunakan TCP Stream ke Server Utama agar kuat kirim file 200MB!
+    """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((HOST, TCP_PORT))
         data_bytes = json.dumps(payload).encode('utf-8')
-        # Peringatan MTU: Jika data > 64KB, sendto akan melempar OSError
-        sock.sendto(data_bytes, (MULTICAST_GROUP, UDP_MULTICAST_PORT))
+        # Gunakan sistem length-prefix header (!I) agar data besar 200MB tidak corrupt di server
+        header = struct.pack('!I', len(data_bytes))
+        sock.sendall(header + data_bytes)
         sock.close()
         return True
-    except OSError as e:
-        if e.errno == 90: # Message too long
-            st.error("Gagal: Ukuran file terlalu besar untuk 1 paket UDP Multicast (Maks 64KB). Gunakan TCP atau file lebih kecil.")
-        else:
-            st.error(f"UDP Error: {e}")
-        return False
     except Exception as e:
+        st.error(f"Gagal Kirim Multicast via Jalur TCP: {e}")
         return False
 
 def kirim_packet_broadcast_udp(payload):
-    """Skenario Broadcast (31-40): Menggunakan UDP SO_BROADCAST"""
+    """
+    Skenario Broadcast TOA: Nama fungsi TETAP UDP agar tidak merusak kode UI,
+    tetapi mekanisme diganti menggunakan TCP Stream ke Server Utama agar kuat kirim file 200MB!
+    """
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((HOST, TCP_PORT))
         data_bytes = json.dumps(payload).encode('utf-8')
-        sock.sendto(data_bytes, ('255.255.255.255', UDP_BROADCAST_PORT))
+        # Gunakan sistem length-prefix header (!I) agar data besar 200MB tidak corrupt di server
+        header = struct.pack('!I', len(data_bytes))
+        sock.sendall(header + data_bytes)
         sock.close()
         return True
-    except OSError as e:
-        if e.errno == 90:
-            st.error("Gagal: Ukuran file terlalu besar untuk 1 paket UDP Broadcast. (Limit MTU tercapai)")
-        return False
     except Exception as e:
+        st.error(f"Gagal Kirim Broadcast Toa via Jalur TCP: {e}")
         return False
 
 # --- DYNAMIC HISTORY PER USER ---
@@ -218,7 +216,7 @@ if not st.session_state.connected:
                             st.session_state.rooms, st.session_state.personal_chats = muat_history_dari_file()
                             st.rerun()
                         else: st.error("Server Utama Offline!")
-                    
+                        
         with tab_register:
             st.write("")
             reg_nama = st.text_input("Nama Lengkap Baru:", key="reg_name_input").strip()
@@ -313,10 +311,11 @@ else:
     
     is_pimpinan = st.session_state.my_divisi == "Pimpinan & Administrasi"
     if is_pimpinan:
-        with st.sidebar.expander("📢 Announcement (Broadcast UDP)", expanded=False):
+        with st.sidebar.expander("📢 Announcement (Broadcast TCP)", expanded=False):
             target_toa = st.selectbox("Pilih Jalur Distribusi:", ["Kirim ke Semua Grup Divisi"], key="target_toa_select")
             isi_toa = st.text_area("Isi Pengumuman Toa:", key="isi_toa_text")
-            file_toa = st.file_uploader("Lampirkan File Broadcast (Maks 60KB untuk UDP):", key="file_toa_uploader")
+            # Kita set uploader-nya biar leluasa nampung file besar 200MB via TCP
+            file_toa = st.file_uploader("Lampirkan File Broadcast (Maks 200MB):", key="file_toa_uploader")
             if st.button("Semburkan Toa 📢", use_container_width=True):
                 if isi_toa or file_toa:
                     if file_toa:
@@ -340,10 +339,11 @@ else:
                         }
                         konten_tampil = f"📢 [ANNOUNCEMENT PIMPINAN]: {isi_toa}"
 
+                    # Fungsi ini sekarang berjalan murni via TCP stream di backend
                     if kirim_packet_broadcast_udp(packet):
                         chat_saya = {"sender": st.session_state.my_name, "content": konten_tampil, "time": time.strftime("%H:%M")}
                         for div in st.session_state.rooms.keys(): st.session_state.rooms[div].append(chat_saya)
-                        simpan_history_ke_file(); st.toast("Toa pengumuman (Broadcast UDP) disemburkan!"); st.rerun()
+                        simpan_history_ke_file(); st.toast("Toa pengumuman sukses disemburkan via TCP!"); st.rerun()
 
     if st.sidebar.button("Keluar Jaringan ❌", use_container_width=True):
         st.session_state.connected = False
@@ -367,7 +367,7 @@ else:
                     "to_divisi": room_aktif if tipe_jaringan == "MULTICAST" else ""
                 }
                 
-                # Eksekusi Transport Sesuai Matriks
+                # Keduanya sekarang dialihkan lewat TCP murni agar aman tanpa batas limit MTU
                 dikirim = kirim_packet_unicast_tcp(packet_teks) if tipe_jaringan == "UNICAST" else kirim_packet_multicast_udp(packet_teks)
                 
                 if dikirim:
@@ -392,6 +392,7 @@ else:
                     "to_divisi": room_aktif if tipe_jaringan == "MULTICAST" else ""
                 }
                 
+                # Eksekusi aman via TCP Stream
                 dikirim_file = kirim_packet_unicast_tcp(packet_file) if tipe_jaringan == "UNICAST" else kirim_packet_multicast_udp(packet_file)
                 
                 if dikirim_file:
@@ -409,7 +410,7 @@ else:
     
     with kolom_wa_kiri:
         st.markdown("### 📱 Obrolan Masuk")
-        sub_tab_personal, sub_tab_group = st.tabs(["💬 Personal (TCP Unicast)", "👥 Grup (UDP Multicast)"])
+        sub_tab_personal, sub_tab_group = st.tabs(["💬 Personal (TCP Unicast)", "👥 Grup (TCP Multicast Target)"])
         
         with sub_tab_personal:
             new_target = st.text_input("Mulai Chat Baru (ID Target):", key="wa_id_search", placeholder="Masukkan 4 angka ID...").strip().upper()
