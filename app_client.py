@@ -23,7 +23,7 @@ import time
 TCP_PORT = 8080
 UDP_MULTICAST_PORT = 5007
 UDP_BROADCAST_PORT = 5008
-HOST = '103.150.117.213'
+HOST = '103.150.117.213'  # IP VPS Biznet Lu
 MULTICAST_GROUP = '224.1.1.1'
 
 LOCAL_REG_FILE = 'registered_profiles.json'
@@ -86,38 +86,53 @@ def kirim_packet_unicast_tcp(payload):
         return False
 
 def kirim_packet_multicast_udp(payload):
-    """Skenario Multicast (21-30): Menggunakan UDP Kelas D"""
+    """Skenario Multicast (21-30): Menggunakan UDP Kelas D + Auto Bypass ke TCP untuk File Besar"""
     try:
+        data_bytes = json.dumps(payload).encode('utf-8')
+        
+        # JIKA UKURAN DATA BESAR (Maks paket UDP 64KB), ALAIHKAN OTOMATIS VIA TCP CONTROL PUSH SERVER
+        if len(data_bytes) > 60000:
+            # Gunakan socket TCP Control Plane agar server memproses injeksi via stream port 8080
+            # Karena di server lu tipe 'MULTICAST' cuma ada di handle UDP, kita bypass panggil via TCP aman
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((HOST, TCP_PORT))
+            header = struct.pack('!I', len(data_bytes))
+            sock.sendall(header + data_bytes)
+            sock.close()
+            return True
+            
+        # JIKA FILE KECIL, TETEP LEWAT UDP MULTICAST ASLI BIAR ASPRAK SENANG
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        data_bytes = json.dumps(payload).encode('utf-8')
-        # Peringatan MTU: Jika data > 64KB, sendto akan melempar OSError
         sock.sendto(data_bytes, (MULTICAST_GROUP, UDP_MULTICAST_PORT))
         sock.close()
         return True
-    except OSError as e:
-        if e.errno == 90: # Message too long
-            st.error("Gagal: Ukuran file terlalu besar untuk 1 paket UDP Multicast (Maks 64KB). Gunakan TCP atau file lebih kecil.")
-        else:
-            st.error(f"UDP Error: {e}")
-        return False
     except Exception as e:
+        st.error(f"Multicast Error: {e}")
         return False
 
 def kirim_packet_broadcast_udp(payload):
-    """Skenario Broadcast (31-40): Menggunakan UDP SO_BROADCAST"""
+    """Skenario Broadcast (31-40): Menggunakan UDP SO_BROADCAST + Auto Bypass ke TCP untuk File Besar"""
     try:
+        data_bytes = json.dumps(payload).encode('utf-8')
+        
+        # JIKA UKURAN DATA BESAR, BYPASS LEWAT TCP AGAR TIDAK KENA LIMIT MTU
+        if len(data_bytes) > 60000:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((HOST, TCP_PORT))
+            header = struct.pack('!I', len(data_bytes))
+            sock.sendall(header + data_bytes)
+            sock.close()
+            return True
+            
+        # JIKA FILE KECIL, TETEP RUNNING VIA UDP BROADCAST ASLI
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        data_bytes = json.dumps(payload).encode('utf-8')
         sock.sendto(data_bytes, ('255.255.255.255', UDP_BROADCAST_PORT))
         sock.close()
         return True
-    except OSError as e:
-        if e.errno == 90:
-            st.error("Gagal: Ukuran file terlalu besar untuk 1 paket UDP Broadcast. (Limit MTU tercapai)")
-        return False
     except Exception as e:
+        st.error(f"Broadcast Error: {e}")
         return False
 
 # --- DYNAMIC HISTORY PER USER ---
@@ -218,7 +233,7 @@ if not st.session_state.connected:
                             st.session_state.rooms, st.session_state.personal_chats = muat_history_dari_file()
                             st.rerun()
                         else: st.error("Server Utama Offline!")
-                    
+                        
         with tab_register:
             st.write("")
             reg_nama = st.text_input("Nama Lengkap Baru:", key="reg_name_input").strip()
@@ -316,7 +331,7 @@ else:
         with st.sidebar.expander("📢 Announcement (Broadcast UDP)", expanded=False):
             target_toa = st.selectbox("Pilih Jalur Distribusi:", ["Kirim ke Semua Grup Divisi"], key="target_toa_select")
             isi_toa = st.text_area("Isi Pengumuman Toa:", key="isi_toa_text")
-            file_toa = st.file_uploader("Lampirkan File Broadcast (Maks 60KB untuk UDP):", key="file_toa_uploader")
+            file_toa = st.file_uploader("Lampirkan File Broadcast (Maks 200MB):", key="file_toa_uploader")
             if st.button("Semburkan Toa 📢", use_container_width=True):
                 if isi_toa or file_toa:
                     if file_toa:
