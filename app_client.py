@@ -10,8 +10,6 @@ if __name__ == '__main__':
         sys.argv = ["streamlit", "run", __file__]
         sys.exit(stcli.main())
 
-
-
 import streamlit as st
 import socket
 import json
@@ -21,11 +19,11 @@ import os
 import random
 import time
 
-PORT = 8080
-HOST = '103.150.117.213'
+# --- KONFIGURASI JARINGAN ---
+TCP_PORT = 8080
+HOST = '103.150.117.213' # IP VPS Biznet Lu murni
 LOCAL_REG_FILE = 'registered_profiles.json'
 FOLDER_TERIMA = 'received_files_web'
-
 
 STRUKTUR_GBM = {
     "Pimpinan & Administrasi": ["Kepala SPPG", "Akuntan", "Ahli Gizi"],
@@ -107,10 +105,8 @@ def dapatkan_pratinjau_pesan(list_msg, my_name):
     sender = last_msg_item["sender"]
     content = last_msg_item["content"]
     
-    # Prefix pengirim: "Kamu: " jika pengirim adalah saya, selain itu "[Nama]: "
     prefix = "Kamu: " if sender == my_name else f"{sender}: "
     
-    # Bersihkan jika itu file
     if isinstance(content, str) and content.startswith("__MEDIA_FILE__:"):
         nama_file = content.split("__MEDIA_FILE__:")[1].strip()
         preview = f"{prefix}📁 Berkas: {nama_file}"
@@ -119,36 +115,18 @@ def dapatkan_pratinjau_pesan(list_msg, my_name):
         
     return preview[:35] + "..." if len(preview) > 35 else preview
 
-# --- INITIALIZATION STATE ---
-if "connected" not in st.session_state: st.session_state.connected = False
-if "my_id" not in st.session_state: st.session_state.my_id = None
-if "my_name" not in st.session_state: st.session_state.my_name = None
-if "my_divisi" not in st.session_state: st.session_state.my_divisi = None
-if "my_jabatan" not in st.session_state: st.session_state.my_jabatan = None
-if "file_uploader_key" not in st.session_state: st.session_state.file_uploader_key = 0
-
-if "rooms" not in st.session_state or "personal_chats" not in st.session_state:
-    loaded_rooms, loaded_personal = muat_history_dari_file()
-    st.session_state.rooms = loaded_rooms
-    st.session_state.personal_chats = loaded_personal
-
-if "active_room" not in st.session_state: st.session_state.active_room = None
-if "active_room_type" not in st.session_state: st.session_state.active_room_type = None
-
 # --- FIX SAKTI: IMPLEMENTASI PENERIMA KUALITAS TINGGI PADA INSTANT TRANSMISSION ---
 def kirim_dan_terima_instant(packet):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((HOST, PORT))
+        sock.connect((HOST, TCP_PORT))
         data_bytes = json.dumps(packet).encode('utf-8')
         header = struct.pack('!I', len(data_bytes))
         sock.sendall(header + data_bytes)
         
-        # Membaca header ukuran balasan dari server secara presisi (4 bytes)
         res_header = receive_fixed_size_client(sock, 4)
         if res_header:
             packet_length = struct.unpack('!I', res_header)[0]
-            # Melakukan loop penarikan data biner sampai utuh tanpa terputus MTU jarkom
             res_bytes = receive_fixed_size_client(sock, packet_length)
             if res_bytes:
                 respon = json.loads(res_bytes.decode('utf-8'))
@@ -187,7 +165,7 @@ if not st.session_state.connected:
                             st.session_state.rooms, st.session_state.personal_chats = muat_history_dari_file()
                             st.rerun()
                         else: st.error("Server Utama Offline!")
-                    
+                        
         with tab_register:
             st.write("")
             reg_nama = st.text_input("Nama Lengkap Baru:", key="reg_name_input").strip()
@@ -259,12 +237,10 @@ else:
                             st.session_state.rooms[t_div].append(chat_entry)
                             needs_save = True
                     elif p_type == "BROADCAST_TOA_ALL_GROUPS":
-                        # Jika penerima adalah Pimpinan, masukkan ke seluruh room divisi yang dimilikinya
                         if st.session_state.my_divisi == "Pimpinan & Administrasi":
                             for div in st.session_state.rooms.keys():
                                 st.session_state.rooms[div].append(chat_entry)
                         else:
-                            # Jika penerima adalah staff biasa, masukkan ke room divisi milik staff tersebut
                             t_div = st.session_state.my_divisi
                             if t_div in st.session_state.rooms:
                                 st.session_state.rooms[t_div].append(chat_entry)
@@ -287,12 +263,48 @@ else:
         with st.sidebar.expander("📢 Announcement", expanded=False):
             target_toa = st.selectbox("Pilih Jalur Distribusi:", ["Kirim ke Semua Grup Divisi", "Kirim ke Semua Chat Personal"], key="target_toa_select")
             isi_toa = st.text_area("Isi Pengumuman Toa:", key="isi_toa_text")
+            
+            # 🔥 SAKTI: DI SINI TOMBOL UPLOAD BROADCAST-NYA GUA PASANG NYET!
+            file_toa = st.file_uploader("Lampirkan Berkas Pengumuman (Maks 200MB):", key="file_toa_uploader")
+            
             if st.button("Semburkan Toa 📢", use_container_width=True):
-                if isi_toa:
+                if isi_toa or file_toa:
                     macro_type = "BROADCAST_TOA_ALL_GROUPS" if "Grup" in target_toa else "BROADCAST_TOA_ALL_PERSONAL"
-                    packet = {"type": macro_type, "from_id": st.session_state.my_id, "from_name": st.session_state.my_name, "divisi": st.session_state.my_divisi, "jabatan": st.session_state.my_jabatan, "msgType": "TEXT", "content": f"📢 [ANNOUNCEMENT PIMPINAN]: {isi_toa}"}
+                    
+                    # Logika penyusunan paket (Apakah kirim file biner atau cuma teks biasa)
+                    if file_toa:
+                        nama_f = file_toa.name
+                        konten_f_bytes = file_toa.read()
+                        encoded_file = base64.b64encode(konten_f_bytes).decode('utf-8')
+                        
+                        # Simpan di lokal folder pimpinan sendiri biar bisa ke-render di UI kamar chat dia
+                        with open(os.path.join(FOLDER_TERIMA, nama_f), 'wb') as f: f.write(konten_f_bytes)
+                        
+                        packet = {
+                            "type": macro_type, 
+                            "from_id": st.session_state.my_id, 
+                            "from_name": st.session_state.my_name, 
+                            "divisi": st.session_state.my_divisi, 
+                            "jabatan": st.session_state.my_jabatan, 
+                            "msgType": "FILE", 
+                            "content": encoded_file, 
+                            "fileName": nama_f
+                        }
+                        konten_tampil = f"__MEDIA_FILE__:{nama_f}"
+                    else:
+                        packet = {
+                            "type": macro_type, 
+                            "from_id": st.session_state.my_id, 
+                            "from_name": st.session_state.my_name, 
+                            "divisi": st.session_state.my_divisi, 
+                            "jabatan": st.session_state.my_jabatan, 
+                            "msgType": "TEXT", 
+                            "content": f"📢 [ANNOUNCEMENT PIMPINAN]: {isi_toa}"
+                        }
+                        konten_tampil = f"📢 [ANNOUNCEMENT PIMPINAN]: {isi_toa}"
+                        
                     if kirim_dan_terima_instant(packet):
-                        chat_saya = {"sender": st.session_state.my_name, "content": f"📢 [ANNOUNCEMENT PIMPINAN]: {isi_toa}", "time": time.strftime("%H:%M")}
+                        chat_saya = {"sender": st.session_state.my_name, "content": konten_tampil, "time": time.strftime("%H:%M")}
                         if "Grup" in target_toa:
                             for div in st.session_state.rooms.keys(): st.session_state.rooms[div].append(chat_saya)
                         else:
@@ -332,7 +344,6 @@ else:
                 konten_f_bytes = file_upload_wa.read()
                 encoded_file = base64.b64encode(konten_f_bytes).decode('utf-8')
                 
-                # Simpan berkas secara lokal di sisi pengirim agar bisa di-render
                 with open(os.path.join(FOLDER_TERIMA, nama_f), 'wb') as f: f.write(konten_f_bytes)
                 
                 packet_file = {
@@ -349,7 +360,6 @@ else:
                     success_sent = True
                     
             if success_sent:
-                # Reset uploader berkas dengan menaikkan suffix key
                 st.session_state.file_uploader_key += 1
                 simpan_history_ke_file()
                 st.toast("Pesan/Berkas berhasil terkirim!")
@@ -457,14 +467,12 @@ else:
             key_uploader = f"file_uploader_{st.session_state.file_uploader_key}"
             file_upload_wa = None
             
-            # Buat layout input dan tombol attachment (+) di luar form
             col_input_area, col_attach = st.columns([8, 1])
             with col_attach:
                 with st.popover("➕", help="Lampirkan File", use_container_width=True):
                     file_upload_wa = st.file_uploader("Pilih Berkas:", key=key_uploader, label_visibility="collapsed")
             
             with col_input_area:
-                # Gunakan st.form borderless agar submit enter/button terpicu tepat 1 kali saja
                 with st.form("chat_form", clear_on_submit=True, border=False):
                     input_teks_wa = st.text_input(
                         "Ketik pesan operasional Anda di sini...", 
